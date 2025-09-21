@@ -587,13 +587,14 @@ if __name__ == "__main__":
         # tokens_per_second = ddp_world_size * B * T / (t1-t0)
         dist.all_reduce(train_loss, op=dist.ReduceOp.AVG)
         lossf = train_loss.item()  # keep track of the mean loss
+        val_loss_f = float(val_loss.item())
         print0(
             f"step:{step}/{args.num_iterations} | loss {lossf:.6f} | train_time:{approx_training_time_ms / 1000:.2f}s | step_avg:{approx_training_time_ms / (step + 1):.2f}ms"
         )
         if master_process:
             if args.log_wandb:
                 wb_log(
-                    {"Validation/Loss (cross-entropy)": lossf,
+                    {"Validation/Loss (cross-entropy)": val_loss_f,
                      "Timing/Training time [ms]": training_time_ms},
                     global_tokens
                 )
