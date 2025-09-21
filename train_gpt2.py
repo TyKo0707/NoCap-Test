@@ -36,24 +36,33 @@ parser.add_argument("--output_dir", type=str, default="",
 parser.add_argument("--model", type=str, default="d12", help="d12|d24|d36|d48")
 
 # token layout for each step of the optimization
-parser.add_argument("--batch_size", type=int, default=4, help="batch size, in units of #batch dimensions")
-parser.add_argument("--grad_accumulation_steps", type=int, default=1, help="number of gradient accumulation steps")
-parser.add_argument("--sequence_length", type=int, default=64, help="sequence length")
+parser.add_argument("--batch_size", type=int, default=16, help="batch size, in units of #batch dimensions")
+parser.add_argument("--grad_accumulation_steps", type=int, default=32, help="number of gradient accumulation steps")
+parser.add_argument("--sequence_length", type=int, default=1024, help="sequence length")
 
 # workload (number of steps)
-parser.add_argument("--num_iterations", type=int, default=100, help="number of iterations to run")
+parser.add_argument("--num_iterations", type=int, default=7000, help="number of iterations to run")
 
 # optimization
-parser.add_argument("--learning_rate", type=float, default=1e-4, help="learning rate warmup iterations")
-parser.add_argument("--warmup_iters", type=int, default=0, help="learning rate warmup iterations")
-parser.add_argument("--warmdown_iters", type=int, default=0, help="learning rate warmdown iterations")
-parser.add_argument("--weight_decay", type=float, default=0.0, help="weight decay")
+parser.add_argument("--learning_rate", type=float, default=0.0018, help="learning rate warmup iterations")
+parser.add_argument("--warmup_iters", type=int, default=1024, help="learning rate warmup iterations")
+parser.add_argument("--warmdown_iters", type=int, default=256, help="learning rate warmdown iterations")
+parser.add_argument("--weight_decay", type=float, default=0.1, help="weight decay")
 
 # evaluation
-parser.add_argument("--val_loss_every", type=int, default=0, help="every how many steps to evaluate val loss?")
+parser.add_argument("--val_loss_every", type=int, default=128, help="every how mant steps to evaluate val loss?")
 parser.add_argument("--val_batch_size", type=int, default=16, help="how many batches of val to average?")
 parser.add_argument("--save_every", type=int, default=5000, help="every how many steps to save the checkpoint")
-parser.add_argument("--log_wandb", action="store_true", help="log to wandb")
+parser.add_argument("--log_wandb", action="store_true", default=False, help="log to wandb")
+
+# ddp
+parser.add_argument("--ddp_rank", type=int, default=0, help="ddp rank")
+parser.add_argument("--ddp_local_rank", type=int, default=0, help="ddp local rank")
+parser.add_argument("--ddp_world_size", type=int, default=1, help="ddp world size")
+
+# thresholds
+parser.add_argument("--stop_val_threshold", type=float, default=3.3821, help="Threshold to stop training")
+
 args = parser.parse_args()
 
 with open(sys.argv[0]) as f:
