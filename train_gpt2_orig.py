@@ -628,7 +628,7 @@ if __name__ == "__main__":
     destroy_process_group()
 
 """ run command
-torchrun --standalone --nproc_per_node=1 train_gpt2.py \
+torchrun --standalone --nproc_per_node=1 train_gpt2_orig.py \
   --input_bin "data/fineweb10B/fineweb_train_*.bin" \
   --input_val_bin "data/fineweb10B/fineweb_val_*.bin" \
   --output_dir pylog124M \
