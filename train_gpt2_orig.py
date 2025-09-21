@@ -17,6 +17,7 @@ from torch.distributed import init_process_group, destroy_process_group
 with open(sys.argv[0]) as f:
     code = f.read()
 
+
 # -----------------------------------------------------------------------------
 # PyTorch nn.Module definitions for the GPT-2 model
 
@@ -236,7 +237,7 @@ class DistributedDataLoader:
         # glob files that match the pattern
         self.files = sorted(glob.glob(filename_pattern))
         assert (
-            len(self.files) > 0
+                len(self.files) > 0
         ), f"did not find any files that match the pattern {filename_pattern}"
 
         # load and validate all data shards, count number of tokens in total
@@ -266,7 +267,7 @@ class DistributedDataLoader:
     def next_batch(self):
         B = self.B
         T = self.T
-        buf = self.tokens[self.current_position : self.current_position + B * T + 1]
+        buf = self.tokens[self.current_position: self.current_position + B * T + 1]
         buf = torch.tensor(buf.astype(np.int32), dtype=torch.long)
         x = (buf[:-1]).view(B, T)  # inputs
         y = (buf[1:]).view(B, T)  # targets
@@ -288,6 +289,13 @@ def print0(*args, **kwargs):
     # if this is not a distributed run, it's just a print
     if int(os.environ.get("RANK", 0)) == 0:
         print(*args, **kwargs)
+
+
+def wb_log(metrics: dict, step_tokens: int):
+    # Ensure a consistent x-axis across charts
+    metrics = dict(metrics)  # shallow copy
+    metrics["global_tokens"] = step_tokens
+    wandb.log(metrics, step=step_tokens)
 
 
 if __name__ == "__main__":
@@ -396,7 +404,7 @@ if __name__ == "__main__":
     ddp_local_rank = int(os.environ["LOCAL_RANK"])
     ddp_world_size = int(os.environ["WORLD_SIZE"])
     assert (
-        args.grad_accumulation_steps % ddp_world_size == 0
+            args.grad_accumulation_steps % ddp_world_size == 0
     ), "grad_accumulation_steps must be divisible by world size"
     args.grad_accumulation_steps //= (
         ddp_world_size  # each gpu does its fraction of the work
@@ -466,6 +474,7 @@ if __name__ == "__main__":
         device_type=device,
     )
 
+
     # learning rate decay scheduler (linear warmup and warmdown)
     def get_lr(it):
         assert it <= args.num_iterations
@@ -479,6 +488,7 @@ if __name__ == "__main__":
         else:
             decay_ratio = (args.num_iterations - it) / args.warmdown_iters
             return args.learning_rate * decay_ratio
+
 
     run_id = str(uuid.uuid4())
 
@@ -499,6 +509,7 @@ if __name__ == "__main__":
     # begin training
     for step in range(args.num_iterations + 1):
         last_step = step == args.num_iterations
+        global_tokens = step * tokens_per_iter
 
         # once in a while evaluate the validation dataset
         if args.val_loss_every > 0 and (step % args.val_loss_every == 0 or last_step):
@@ -541,13 +552,13 @@ if __name__ == "__main__":
         train_loss = torch.zeros(1, device=device)
         for micro_step in range(args.grad_accumulation_steps):
             model.require_backward_grad_sync = (
-                micro_step == args.grad_accumulation_steps - 1
+                    micro_step == args.grad_accumulation_steps - 1
             )  # sync only on last micro step to avoid overhead
             # forward pass
             with ctx:
                 _, loss = model(x, y, return_logits=False)
                 loss = (
-                    loss / args.grad_accumulation_steps
+                        loss / args.grad_accumulation_steps
                 )  # scale loss for gradient accumulation
                 train_loss += loss.detach()
             # advance the dataset for the next batch
@@ -577,8 +588,19 @@ if __name__ == "__main__":
         dist.all_reduce(train_loss, op=dist.ReduceOp.AVG)
         lossf = train_loss.item()  # keep track of the mean loss
         print0(
-            f"step:{step}/{args.num_iterations} | loss {lossf:.6f} | train_time:{approx_training_time_ms/1000:.2f}s | step_avg:{approx_training_time_ms/(step+1):.2f}ms"
+            f"step:{step}/{args.num_iterations} | loss {lossf:.6f} | train_time:{approx_training_time_ms / 1000:.2f}s | step_avg:{approx_training_time_ms / (step + 1):.2f}ms"
         )
+        if master_process:
+            if args.log_wandb:
+                wb_log(
+                    {"Validation/Loss (cross-entropy)": lossf,
+                     "Timing/Training time [ms]": training_time_ms},
+                    global_tokens
+                )
+            if logfile is not None:
+                with open(logfile, "a") as f:
+                    f.write("s:%d val:%f\n" % (step, val_loss))
+
         # log to logile
         if master_process and logfile is not None:
             with open(logfile, "a") as f:
