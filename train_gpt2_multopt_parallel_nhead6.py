@@ -110,18 +110,69 @@ class MLP(nn.Module):
         return x
 
 
-class Block(nn.Module):
+# class Block(nn.Module):
+#
+#     def __init__(self, config):
+#         super().__init__()
+#         self.attn = CausalSelfAttention(config)
+#         self.mlp = MLP(config)
+#         self.attn_scale = 1 / math.sqrt(2 * config.n_layer)
+#
+#     def forward(self, x):
+#         x = x + self.attn_scale * self.attn(rmsnorm(x))
+#         x = x + self.mlp(rmsnorm(x))
+#         return x
 
-    def __init__(self, config):
+class Block(nn.Module):
+    """
+    Parallel residual streams: compute attention and MLP outputs in parallel
+    from the same pre-normalized input, then add both residuals back.
+    This is a simple, stable way to experiment with the 'parallel streams'
+    idea used in PaLM / GPT-J style architectures.
+    """
+
+    def __init__(self, config, attn_scale=None, mlp_scale=None):
         super().__init__()
         self.attn = CausalSelfAttention(config)
         self.mlp = MLP(config)
-        self.attn_scale = 1 / math.sqrt(2 * config.n_layer)
+        # default scaling similar to prior (keeps variance stable across many layers)
+        if attn_scale is None:
+            self.attn_scale = 1.0 / math.sqrt(2 * config.n_layer)
+        else:
+            self.attn_scale = attn_scale
+        if mlp_scale is None:
+            self.mlp_scale = 1.0 / math.sqrt(2 * config.n_layer)
+        else:
+            self.mlp_scale = mlp_scale
+
+        # optional tiny gating parameters (learnable) to let model weight streams
+        # start near 1.0 so behavior initially similar to un-gated sum
+        self.use_gating = True
+        if self.use_gating:
+            self.attn_gate = nn.Parameter(torch.tensor(1.0, dtype=torch.float32))
+            self.mlp_gate = nn.Parameter(torch.tensor(1.0, dtype=torch.float32))
 
     def forward(self, x):
-        x = x + self.attn_scale * self.attn(rmsnorm(x))
-        x = x + self.mlp(rmsnorm(x))
-        return x
+        """
+        x: (B, T, C)
+        Compute:
+          n = rmsnorm(x)
+          a = attn(n)
+          m = mlp(n)
+          x = x + attn_scale * gate_a * a + mlp_scale * gate_m * m
+        """
+        n = rmsnorm(x)  # pre-norm shared for both streams
+
+        # compute both in parallel (PyTorch will schedule them)
+        a = self.attn(n)  # (B, T, C)
+        m = self.mlp(n)  # (B, T, C)
+
+        if self.use_gating:
+            out = x + (self.attn_scale * self.attn_gate) * a + (self.mlp_scale * self.mlp_gate) * m
+        else:
+            out = x + self.attn_scale * a + self.mlp_scale * m
+
+        return out
 
 
 # -----------------------------------------------------------------------------
@@ -132,7 +183,7 @@ class Block(nn.Module):
 class GPTConfig:
     vocab_size: int = 50257
     n_layer: int = 12
-    n_head: int = 12
+    n_head: int = 6
     n_embd: int = 768
 
 
@@ -466,13 +517,42 @@ if __name__ == "__main__":
     model = DDP(model, device_ids=[ddp_local_rank])
     raw_model = model.module  # always contains the "raw" unwrapped model
 
-    # init the optimizer
-    optimizer = raw_model.configure_optimizers(
+
+    # ---------------- Layer-wise Learning Rate Decay (LLRD) ----------------
+    def get_layerwise_params(raw_model, base_lr=0.0006, lr_decay=0.9, weight_decay=0.1):
+        params = []
+        seen = set()  # track parameters to avoid duplicates
+
+        def add_group(param_iter, lr):
+            param_list = [p for p in param_iter if p not in seen]
+            seen.update(param_list)
+            if param_list:  # only add if not empty
+                params.append({"params": param_list, "lr": lr, "weight_decay": weight_decay})
+
+        # embeddings (lowest LR)
+        emb_lr = base_lr * (lr_decay ** raw_model.config.n_layer)
+        add_group(list(raw_model.transformer.wte.parameters()), emb_lr)
+
+        # transformer blocks (progressively larger LRs)
+        for i, block in enumerate(raw_model.transformer.h):
+            decay_factor = lr_decay ** (raw_model.config.n_layer - 1 - i)
+            lr = base_lr * decay_factor
+            add_group(list(block.parameters()), lr)
+
+        # head (highest LR, adapts fastest)
+        add_group(list(raw_model.lm_head.parameters()), base_lr)
+
+        return params
+
+
+    # init the optimizer with LLRD
+    param_groups = get_layerwise_params(
+        raw_model,
+        base_lr=args.learning_rate,
+        lr_decay=0.9,
         weight_decay=args.weight_decay,
-        learning_rate=args.learning_rate,
-        betas=(0.9, 0.95),
-        device_type=device,
     )
+    optimizer = torch.optim.AdamW(param_groups, betas=(0.9, 0.95))
 
 
     # learning rate decay scheduler (linear warmup and warmdown)
@@ -626,18 +706,19 @@ if __name__ == "__main__":
     # clean up nice
     destroy_process_group()
 
+
 """ run command
 torchrun --standalone --nproc_per_node=1 train_gpt2.py \
-  --input_bin "data/fineweb10B/fineweb_train_*.bin" \
-  --input_val_bin "data/fineweb10B/fineweb_val_*.bin" \
+  --input_bin "data/fineweb10B_balanced_buckets/bucket0*.bin" \
+  --input_val_bin "data/fineweb10B_balanced_buckets/bucket_val_*.bin" \
   --output_dir pylog124M \
   --model d12 \
   --batch_size 16 \
-  --grad_accumulation_steps 32 \
+  --grad_accumulation_steps 16 \
   --sequence_length 1024 \
   --val_loss_every 128 \
   --val_batch_size 16 \
-  --num_iterations 4768 \
+  --num_iterations 12000 \
   --weight_decay 0.1 \
   --learning_rate 0.0018 \
   --warmup_iters 256 \
