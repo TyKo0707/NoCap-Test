@@ -27,9 +27,9 @@ print0(f"Running pytorch {torch.version.__version__}")
 parser = argparse.ArgumentParser()
 
 # file system input / output
-parser.add_argument("--input_bin", type=str, default="/fineweb10B_balanced_buckets/bucket0*.bin",
+parser.add_argument("--input_bin", type=str, default="data/fineweb10B_balanced_buckets/bucket0*.bin",
                     help="input .bin to train on", )
-parser.add_argument("--input_val_bin", type=str, default="/fineweb10B_balanced_buckets/bucket_val_*.bin",
+parser.add_argument("--input_val_bin", type=str, default="data/fineweb10B_balanced_buckets/bucket_val_*.bin",
                     help="input .bin to eval validation loss on")
 parser.add_argument("--output_dir", type=str, default="",
                     help="output directory to which to write logs and checkpoints")
