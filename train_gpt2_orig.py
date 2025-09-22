@@ -526,12 +526,19 @@ if __name__ == "__main__":
                     val_loss += loss
                 dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
                 val_loss /= val_steps
+
+            val_loss_f = float(val_loss.item())
             # log to console and to file
             print0(f"step:{step}/{args.num_iterations} | val loss {val_loss:.6f}")
             if master_process:
                 if args.log_wandb:
                     wandb.log({"val_loss": val_loss}, step=step * tokens_per_iter)
                     wandb.log({"time": training_time_ms}, step=step * tokens_per_iter)
+                    wb_log(
+                        {"Validation/Loss (cross-entropy)": val_loss_f,
+                         "Timing/Training time [ms]": training_time_ms},
+                        global_tokens
+                    )
                 if logfile is not None:
                     with open(logfile, "a") as f:
                         f.write("s:%d val:%f\n" % (step, val_loss))
@@ -587,17 +594,10 @@ if __name__ == "__main__":
         # tokens_per_second = ddp_world_size * B * T / (t1-t0)
         dist.all_reduce(train_loss, op=dist.ReduceOp.AVG)
         lossf = train_loss.item()  # keep track of the mean loss
-        val_loss_f = float(val_loss.item())
         print0(
             f"step:{step}/{args.num_iterations} | loss {lossf:.6f} | train_time:{approx_training_time_ms / 1000:.2f}s | step_avg:{approx_training_time_ms / (step + 1):.2f}ms"
         )
         if master_process:
-            if args.log_wandb:
-                wb_log(
-                    {"Validation/Loss (cross-entropy)": val_loss_f,
-                     "Timing/Training time [ms]": training_time_ms},
-                    global_tokens
-                )
             if logfile is not None:
                 with open(logfile, "a") as f:
                     f.write("s:%d val:%f\n" % (step, val_loss))
