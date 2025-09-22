@@ -183,7 +183,7 @@ class Block(nn.Module):
 class GPTConfig:
     vocab_size: int = 50257
     n_layer: int = 12
-    n_head: int = 6
+    n_head: int = 12
     n_embd: int = 768
 
 
